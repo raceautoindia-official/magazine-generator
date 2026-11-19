@@ -6,7 +6,7 @@ import { currentUser, requireUser } from "@/lib/auth";
 import { saveForeword, writeForeword } from "@/lib/ai/foreword";
 import { getEdition } from "@/lib/editions";
 import { setManualKind } from "@/lib/magazine/extras";
-import { chooseCover, keepFinishedCopy, renderEdition, setCoverStyle } from "@/lib/magazine/render";
+import { chooseCover, keepFinishedCopy, paintCover, renderEdition, setCoverStyle } from "@/lib/magazine/render";
 import { EditError, finishEdition, isDraft, markStale, reopenEdition, saveArticles } from "@/lib/review";
 import { recordTiming, Timer } from "@/lib/timing";
 import { activeJob, startJob } from "@/lib/jobs";
@@ -35,6 +35,22 @@ function messageOf(error: unknown, fallback: string): string {
 /** One PDF is made per edition at a time; everything that prints an edition shares this key. */
 const pdfKey = (id: number) => `pdf:${id}`;
 const BUSY = "A PDF is being created for this edition right now. Wait for it to finish, then try again.";
+/** The AI cover painted for the Design tab, before or apart from a PDF. */
+const coverKey = (id: number) => `cover:${id}`;
+const PAINTING = "The AI cover of this edition is being painted right now. Wait for it to finish (about half a minute), then try again.";
+
+/**
+ * Paints the AI cover the edition is waiting for, in the background, so the Design tab can show the cover as it
+ * will print. The picture is kept, so the PDF made later does not pay for it again.
+ */
+export async function paintAiCover(formData: FormData): Promise<Started> {
+  const user = await requireUser();
+  const id = editionId(formData);
+  if (!id) return { error: "Unknown edition." };
+  if (!(await isDraft(id))) return { error: LOCKED };
+  const { id: job } = await startJob({ kind: "cover", key: coverKey(id), label: "Painting the AI cover", editionId: id, by: user.email }, () => paintCover(id, user.email));
+  return { job };
+}
 
 /**
  * Starts creating the PDF in the background and answers at once. The page follows the job; the PDF is made
@@ -103,6 +119,7 @@ export async function changeCoverStyle(formData: FormData): Promise<Started> {
   if (!style.success) return { error: "Unknown cover style." };
   // Not joined to a run already going: that run would print the cover as it was before this change.
   if ((await activeJob(pdfKey(id))) !== null) return { error: BUSY };
+  if ((await activeJob(coverKey(id))) !== null) return { error: PAINTING };
   const repaint = Boolean(formData.get("repaint"));
   const { id: job } = await startJob({ kind: "pdf", key: pdfKey(id), label: repaint ? "Painting a new cover" : "Changing the cover style", editionId: id, by: user.email }, async () => {
     const result = await setCoverStyle(id, style.data, repaint, user.email);
@@ -125,6 +142,7 @@ export async function pickCover(formData: FormData): Promise<Started> {
     return { error: "That article is not in this edition." };
   }
   if ((await activeJob(pdfKey(id))) !== null) return { error: BUSY };
+  if ((await activeJob(coverKey(id))) !== null) return { error: PAINTING };
   const line = String(formData.get("line") ?? "");
   const { id: job } = await startJob({ kind: "pdf", key: pdfKey(id), label: "Changing the cover", editionId: id, by: user.email }, async () => {
     const result = await chooseCover(id, postId, line, user.email);

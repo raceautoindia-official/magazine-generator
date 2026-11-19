@@ -16,17 +16,17 @@ const page = (html: string | null) =>
         },
       });
 
-async function editionOf(context: RouteContext<"/editions/[id]/design/frame">): Promise<number | Response> {
+async function editionOf(context: RouteContext<"/editions/[id]/design/frame">): Promise<{ id: number } | Response> {
   if (!(await currentUser())) return new Response("Sign in first.", { status: 401 });
   const { id } = await context.params;
-  return /^\d{1,9}$/.test(id) ? Number(id) : new Response("Not found.", { status: 404 });
+  return /^\d{1,9}$/.test(id) ? { id: Number(id) } : new Response("Not found.", { status: 404 });
 }
 
 /** The whole magazine as one web page, laid out as the PDF will be, for the Design tab. */
 export async function GET(_request: NextRequest, context: RouteContext<"/editions/[id]/design/frame">) {
-  const id = await editionOf(context);
-  if (id instanceof Response) return id;
-  return page(await designHtml(id));
+  const edition = await editionOf(context);
+  if (edition instanceof Response) return edition;
+  return page(await designHtml(edition.id));
 }
 
 const trial = z.object({
@@ -40,8 +40,9 @@ const trial = z.object({
  * keeps the article's pages as they are before it is saved. Nothing is stored.
  */
 export async function POST(request: NextRequest, context: RouteContext<"/editions/[id]/design/frame">) {
-  const id = await editionOf(context);
-  if (id instanceof Response) return id;
+  const edition = await editionOf(context);
+  if (edition instanceof Response) return edition;
+  const id = edition.id;
   const form = await request.formData();
   let input: z.infer<typeof trial>;
   try {

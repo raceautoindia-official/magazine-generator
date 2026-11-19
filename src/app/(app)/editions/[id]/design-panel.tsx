@@ -1,8 +1,12 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Elapsed } from "../../elapsed";
+import { useJob } from "../../use-job";
+import { paintAiCover } from "./actions";
 import { dragFraming, framingCss, MAX_ZOOM, tidyFraming, type Framing } from "@/lib/framing";
-import { chooseFramePicture, frameChoices, resetArticleText, resetFrameAt, saveFrameAt, uploadPicture, type PictureChoice } from "./design-actions";
+import { chooseFramePicture, frameChoices, reportDesignWait, resetArticleText, resetFrameAt, saveFrameAt, uploadPicture, type PictureChoice } from "./design-actions";
 import { TextEditor, type PageShape } from "./text-editor";
 import { useUnsaved } from "./unsaved";
 
@@ -121,6 +125,9 @@ export function DesignPanel({
   hasArticles,
   changes,
   articles,
+  version,
+  coverJob,
+  canPaint,
 }: {
   id: number;
   draft: boolean;
@@ -128,15 +135,32 @@ export function DesignPanel({
   changes: DesignChange[];
   /** Included articles in page order, for "Go to". */
   articles: { rowId: number; title: string }[];
+  /** Changes whenever something outside this tab changes what the pages show (articles, adverts, foreword, cover). */
+  version: string;
+  /** The AI cover is being painted already (started from this tab, perhaps in another window). */
+  coverJob: number | null;
+  /** An OpenAI key is set, so an AI cover can be painted. */
+  canPaint: boolean;
 }) {
+  const router = useRouter();
   const unsaved = useUnsaved();
+  const [painted, paint, painting] = useJob<{ painted: boolean; note: string | null }>(paintAiCover, coverJob);
   const holder = useRef<HTMLDivElement>(null);
   const controls = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   // The page is heavy (every photo of the magazine), so it is loaded when this tab is first opened, not with the edition.
   const [wanted, setWanted] = useState(false);
+  /** This tab is the one on screen. */
+  const [visible, setVisible] = useState(false);
   const [reload, setReload] = useState(0);
-  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const [status, setStatus] = useState<"loading" | "ready" | "failed" | "signed-out">("loading");
+  /** The version of the edition the pages on screen were built from. */
+  const [shownVersion, setShownVersion] = useState(version);
+  /** The pages must be built again as soon as nothing is being edited (the AI cover has arrived). */
+  const [again, setAgain] = useState(false);
+  const [seenPaint, setSeenPaint] = useState<number | undefined>(undefined);
+  /** The cover is to be an AI picture that is not painted yet. */
+  const [coverPending, setCoverPending] = useState(false);
   const [box, setBox] = useState({ width: 900, height: 640 });
   /** One spread at a time, like turning pages, or every page below the other. */
   const [view, setView] = useState<"spread" | "all">("spread");
@@ -151,6 +175,22 @@ export function DesignPanel({
   const [editing, setEditing] = useState<{ articleId: number; paragraph: number | null; shape: PageShape | null } | null>(null);
   const editable = draft && !unsaved;
   const spreads = pageCount > 0 ? Math.floor(pageCount / 2) + 1 : 0;
+
+  // The AI cover has been painted (or could not be): the pages are built again to show it.
+  if (painted?.at !== undefined && painted.at !== seenPaint) {
+    setSeenPaint(painted.at);
+    if (!painted.error) setAgain(true);
+  }
+  // Something changed outside this tab, or the cover arrived. The pages are built again by themselves, but never
+  // under the person's hands: while a photo or a text is being edited it waits until that is finished.
+  const outdated = version !== shownVersion || again;
+  if (outdated && visible && wanted && selected === null && chooser === null && editing === null) {
+    setShownVersion(version);
+    setAgain(false);
+    setStatus("loading");
+    setSaved("");
+    setReload((count) => count + 1);
+  }
 
   /** Fits the pages to the room there is and gives the frame the size of what it shows. */
   const fit = useCallback(() => {
@@ -196,13 +236,15 @@ export function DesignPanel({
 
   useEffect(() => {
     const element = holder.current;
-    if (!element || wanted) return;
+    if (!element) return;
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) setWanted(true);
+      const on = entries.some((entry) => entry.isIntersecting);
+      setVisible(on);
+      if (on) setWanted(true);
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [wanted]);
+  }, [hasArticles]);
 
   useEffect(() => {
     if (status === "ready") show(spread);
@@ -277,10 +319,17 @@ export function DesignPanel({
   };
 
   // What the handlers inside the magazine page call: always the latest of the functions above.
-  const latest = useRef({ editable, selected, spread, change, deselect, turn, busy: false });
+  const latest = useRef({ editable, selected, spread, change, deselect, turn, busy: false, painting, version });
   useEffect(() => {
-    latest.current = { editable, selected, spread, change, deselect, turn, busy: chooser !== null || editing !== null };
+    latest.current = { editable, selected, spread, change, deselect, turn, busy: chooser !== null || editing !== null, painting, version };
   });
+  /** The versions of the edition for which painting the cover was started from here: once each, never in a loop. */
+  const paintTried = useRef(new Set<string>());
+  const startPainting = () => {
+    const data = new FormData();
+    data.set("id", String(id));
+    paint(data);
+  };
 
   const windowKeys = useRef<((event: KeyboardEvent) => void) | null>(null);
   useEffect(
@@ -295,7 +344,10 @@ export function DesignPanel({
     const style = doc.createElement("style");
     style.textContent = VIEW_CSS + (draft ? EDIT_CSS : "");
     doc.head.append(style);
-    setPageCount(doc.querySelectorAll(".page").length);
+    const count = doc.querySelectorAll(".page").length;
+    setPageCount(count);
+    // The magazine may have fewer pages than when this spread was opened.
+    setSpread((current) => Math.min(current, Math.floor(count / 2)));
 
     const keys = (event: KeyboardEvent) => {
       const now = latest.current;
@@ -401,13 +453,37 @@ export function DesignPanel({
   const loaded = () => {
     const view = frame.current?.contentWindow as FrameWindow | null;
     if (!view) return;
+    // Not the magazine at all: the session has ended (the login page, or the refusal), or the build failed.
+    const body = view.document.body?.textContent?.trim() ?? "";
+    if (!view.location.pathname.endsWith("/design/frame") || body === "Sign in first.") return setStatus("signed-out");
+    if (!view.document.querySelector(".page")) return setStatus("failed");
     let tries = 0;
     const wait = window.setInterval(() => {
+      // Pages asked for since (a reload, a change elsewhere) have taken this frame's place.
+      if (frame.current?.contentWindow !== view) return window.clearInterval(wait);
       const report = view.__magazine;
       if (report && !report.error) {
         window.clearInterval(wait);
         prepare(view.document);
         setStatus("ready");
+        const pending = view.document.querySelector('meta[name="mg-cover-pending"]')?.getAttribute("content") === "1";
+        setCoverPending(pending);
+        // The cover this edition is to have is painted now, once, so that it is seen here as it will print.
+        const now = latest.current;
+        if (pending && draft && canPaint && !now.painting && !paintTried.current.has(now.version)) {
+          paintTried.current.add(now.version);
+          startPainting();
+        }
+        // The whole wait, from asking for the pages to seeing them, goes into the edition's processing time.
+        let steps: unknown = [];
+        try {
+          steps = (JSON.parse(view.document.getElementById("mg-build")?.textContent ?? "{}") as { steps?: unknown }).steps ?? [];
+        } catch {
+          // Without the server's steps the wait is still recorded, as one figure.
+        }
+        void reportDesignWait(id, Math.round(view.performance.now()), steps).then((recorded) => {
+          if (recorded) router.refresh();
+        });
       } else if (report?.error || tries++ > 1200) {
         window.clearInterval(wait);
         setStatus("failed");
@@ -592,7 +668,10 @@ export function DesignPanel({
                 Done
               </button>
             </div>
-            <p className="mt-1 text-xs text-neutral-600">{moveHint(selected.room, selected.framing.zoom)} Changes are saved by themselves.</p>
+            <p className="mt-1 text-xs text-neutral-600">
+              {moveHint(selected.room, selected.framing.zoom)} Changes are saved by themselves.
+              {outdated && <span className="ml-1 font-medium text-amber-800">The edition was changed elsewhere: the pages are built again when you press Done.</span>}
+            </p>
           </div>
         ) : (
           <p className="mt-1.5 text-sm text-neutral-700" data-design-hint>
@@ -612,10 +691,62 @@ export function DesignPanel({
         </p>
       )}
 
+      {/* The cover: said plainly whenever what is on screen is not yet what will print. */}
+      {draft && painting ? (
+        <p role="status" className="mt-3 rounded border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-950" data-cover-status="painting">
+          <span className="font-medium">The AI is painting the cover.</span> It takes about half a minute and is one request to your OpenAI account; the picture is kept and used by the PDF too. Until it is ready the cover shows the photo on a blurred background. You can go on working.
+          <span className="ml-2 rounded bg-white/70 px-2 py-0.5 font-medium">
+            <Elapsed /> so far
+          </span>
+        </p>
+      ) : draft && painted?.error ? (
+        <div role="alert" className="mt-3 flex flex-wrap items-center gap-3 rounded bg-red-50 px-4 py-3 text-sm text-red-800" data-cover-status="failed">
+          <span className="min-w-0 flex-1">The AI cover could not be painted: {painted.error} The cover shows the photo on a blurred background meanwhile.</span>
+          <button type="button" onClick={startPainting} className={plain}>
+            Try again
+          </button>
+        </div>
+      ) : draft && painted?.note ? (
+        <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950" data-cover-status="fault">
+          <span className="min-w-0 flex-1">{painted.note}</span>
+          {coverPending && canPaint && (
+            <button type="button" onClick={startPainting} title="One request to your OpenAI account, about half a minute" className={plain}>
+              Try again
+            </button>
+          )}
+        </div>
+      ) : draft && coverPending && ready ? (
+        <div role="status" className="mt-3 flex flex-wrap items-center gap-3 rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950" data-cover-status="pending">
+          <span className="min-w-0 flex-1">
+            {canPaint
+              ? "The cover is set to be stretched with AI, and that picture is not painted yet. It shows the photo on a blurred background meanwhile."
+              : "The cover is set to be stretched with AI, but no OpenAI key is set on the server, so it shows the photo on a blurred background. Choose another style on the Cover tab."}
+          </span>
+          {canPaint && (
+            <button type="button" onClick={startPainting} title="One request to your OpenAI account, about half a minute" className={plain}>
+              Paint the AI cover now
+            </button>
+          )}
+        </div>
+      ) : null}
+
       <div ref={holder} className={`relative mt-3 rounded bg-zinc-600 ${size === "real" ? "overflow-x-auto" : "overflow-hidden"}`} style={{ minHeight: 320 }}>
         {status !== "ready" && (
-          <p role="status" className="absolute inset-x-0 top-0 z-10 bg-zinc-800/90 px-4 py-3 text-center text-sm text-white">
-            {status === "failed" ? "The pages could not be shown. Press “Reload”; if it keeps failing, create the PDF to see what is wrong." : "Building the pages… this takes a few seconds, longer the first time."}
+          <p role="status" className="absolute inset-x-0 top-0 z-10 bg-zinc-800/90 px-4 py-3 text-center text-sm text-white" data-design-wait={status}>
+            {status === "signed-out" ? (
+              "You have been signed out (a session lasts 12 hours). Sign in again in another tab, come back here and press “Reload”. What you changed here is already saved."
+            ) : status === "failed" ? (
+              "The pages could not be shown. Press “Reload”; if it keeps failing, create the PDF to see what is wrong."
+            ) : wanted ? (
+              <>
+                Building the pages… a few seconds, longer the first time while the photos are fetched.
+                <span className="ml-2 rounded bg-white/15 px-2 py-0.5 font-medium">
+                  <Elapsed key={`${reload}`} /> so far
+                </span>
+              </>
+            ) : (
+              "The pages are built when this tab is opened."
+            )}
           </p>
         )}
         {wanted && (

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
@@ -175,6 +176,22 @@ export default async function EditionPage({ params }: PageProps<"/editions/[id]"
         // The adverts closest to this edition's articles come first, then those addressed to its readers.
         .sort((a, b) => (a.suggestion ? rank[a.suggestion.relation as keyof typeof rank] : 3) - (b.suggestion ? rank[b.suggestion.relation as keyof typeof rank] : 3) || Number(b.suits) - Number(a.suits))
     : [];
+  const foreword = await getForeword(edition.id);
+  // Everything outside the Design tab that changes what its pages show. When this changes, the tab builds its
+  // pages again; its own changes (a photo moved, a text edited) are not in it, since it shows those as they are made.
+  const designVersion = createHash("sha1")
+    .update(
+      JSON.stringify([
+        edition.status,
+        included.map((article) => [article.id, article.section, article.type]),
+        foreword,
+        cover,
+        placed.map((advert) => [advert.id, advert.articleId, advert.size]),
+        extraImages.map((image) => [image.path, image.manual]),
+      ]),
+    )
+    .digest("hex")
+    .slice(0, 16);
   const warnings = edition.warnings.filter((warning) => warning.level === "warning");
   const notes = edition.warnings.filter((warning) => warning.level !== "warning");
 
@@ -296,7 +313,7 @@ export default async function EditionPage({ params }: PageProps<"/editions/[id]"
             </>
           )
         }
-        foreword={<ForewordPanel id={edition.id} initial={await getForeword(edition.id)} canWrite={claudeAvailable()} locked={!draft} />}
+        foreword={<ForewordPanel id={edition.id} initial={foreword} canWrite={claudeAvailable()} locked={!draft} />}
         cover={
           <>
             <CoverPanel
@@ -321,6 +338,9 @@ export default async function EditionPage({ params }: PageProps<"/editions/[id]"
             draft={draft}
             hasArticles={included.some((article) => article.post)}
             changes={designChanges}
+            version={designVersion}
+            coverJob={draft ? await activeJob(`cover:${edition.id}`) : null}
+            canPaint={imageAiAvailable()}
             articles={included.flatMap((article) => (article.post ? [{ rowId: article.id, title: article.post.title.trim() }] : []))}
           />
         }

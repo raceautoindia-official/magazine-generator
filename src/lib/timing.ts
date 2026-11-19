@@ -9,7 +9,7 @@ import { appExecute, appQuery } from "./db";
 /** Who the time was spent waiting for. */
 export type TimingBy = "app" | "claude" | "openai" | "site";
 export type TimingStep = { name: string; ms: number; by: TimingBy; detail?: string };
-export type TimingKind = "generate" | "pdf" | "foreword" | "advert";
+export type TimingKind = "generate" | "pdf" | "foreword" | "advert" | "design";
 
 export type TimingRun = {
   id: number;

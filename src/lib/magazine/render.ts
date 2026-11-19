@@ -11,7 +11,7 @@ import type { EditionWarning } from "../selection";
 import { getSettings } from "../settings";
 import { recordTiming, Timer, type TimingStep } from "../timing";
 import { buildMagazineHtml, type FrameView, type MagazineArticle, type MagazineModel } from "./html";
-import { frameEdits, frameKey, textEdits, textHash, uploadedImage, type FrameEdit, type Slot, type TextEdit } from "../design";
+import { frameEdits, frameKey, resetFrame, textEdits, textHash, uploadedImage, type FrameEdit, type Slot, type TextEdit } from "../design";
 import type { Framing } from "../framing";
 import type { PostRecord } from "../selection";
 import { printableAdverts, repairAdverts, type PrintAdvert } from "../advert-placement";
@@ -229,11 +229,18 @@ async function prepareArticle(article: EditionArticle, model: string, notes: str
 export type CoverStyle = "ai" | "blur" | "crop";
 const isCoverStyle = (value: unknown): value is CoverStyle => value === "ai" || value === "blur" || value === "crop";
 
-type BuiltModel = { model: MagazineModel; adverts: PrintAdvert[] };
+type BuiltModel = {
+  model: MagazineModel;
+  adverts: PrintAdvert[];
+  /** The cover is to be an AI picture that has not been painted yet; a blurred background stands in for it. */
+  coverPending: boolean;
+};
 
 export type BuildOptions = {
-  /** For the Design tab: nothing is painted by AI and nothing is recorded on the edition. */
+  /** For the Design tab: nothing is recorded on the edition, and no cover is painted by AI unless `paint` says so. */
   live?: boolean;
+  /** With `live`: paint the AI cover if it is wanted and not there yet (a paid request). */
+  paint?: boolean;
   /** Only this article (its row id), to try out a change to it. */
   only?: number;
   /** A headline and text to lay that article out with, in place of what is saved. */
@@ -374,35 +381,51 @@ async function buildModel(edition: Edition, notes: string[], timer: Timer, optio
   const fitsCrop = Boolean(coverPhoto && coverFocus && fitsPortraitCover(coverPhoto, coverFocus));
   const style: CoverStyle = isCoverStyle(earlier[0]?.cover_style) ? earlier[0].cover_style : imageAiAvailable() ? "ai" : fitsCrop ? "crop" : "blur";
   let coverMode: "ai-extend" | "crop" | "full" = style === "ai" ? "ai-extend" : style === "crop" ? "crop" : "full";
-  if (coverPhoto && coverMode === "ai-extend" && !(await hasAiCover(coverPhoto)) && options.live) {
-    // The Design tab never has a cover painted (a paid request that takes a while): that happens when the PDF is created.
-    coverMode = "full";
-  } else if (coverPhoto && coverMode === "ai-extend" && !(await hasAiCover(coverPhoto))) {
+  let coverPending = false;
+  if (coverPhoto && coverMode === "ai-extend" && !(await hasAiCover(coverPhoto))) {
     const rejected = await aiCoverRejection(coverPhoto);
     if (rejected) {
       // Painted before and judged faulty: not painted (and paid for) again until the person asks for a new version.
       notes.push(`The AI cover for this photo had a fault (${rejected}) and is not used; the cover shows the whole photo on a blurred background. Press "Paint a new version" on the Cover tab to try again, or pick another photo.`);
       coverMode = "full";
+    } else if (options.live && !options.paint) {
+      // The pages are shown at once with a blurred background; the painting (a paid request that takes a while)
+      // is done apart from this, and the pages are built again when it is there.
+      coverPending = true;
+      coverMode = "full";
     } else {
       // One paid request per cover photo, a second only when Claude finds a fault in the first. The result is kept
-      // and reused by every later PDF.
-      let fault: string | null = null;
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        const paintFrom = Date.now();
-        try {
-          const file = await extendCoverPhoto(coverPhoto, settings.ai.imageModel, coverSource?.analysis?.subject ?? "", briefing);
-          timer.add({ name: attempt === 1 ? "Cover: AI paints above and below the photo" : "Cover: AI paints it a second time", by: "openai", ms: Date.now() - paintFrom, detail: "one request to OpenAI" });
-          fault = await timer.step("Cover: Claude checks the AI picture for repeated parts and joins", "claude", () => coverFlaws(file, settings.ai.textModel), (found) => (found ? `fault found: ${found}` : "no fault found"));
-          if (!fault) break;
-        } catch (error) {
-          timer.add({ name: "Cover: AI paints above and below the photo", by: "openai", ms: Date.now() - paintFrom, detail: "failed" });
-          console.error("cover extension failed", error);
-          fault = `the request failed: ${error instanceof Error ? error.message : "unknown error"}`;
-          break;
-        }
+      // and reused by every later PDF. Two runs that want the same picture at once share one painting.
+      const photo = coverPhoto;
+      const key = aiCoverPath(photo);
+      let painting = paintings.get(key);
+      const mine = !painting;
+      if (!painting) {
+        painting = (async () => {
+          let fault: string | null = null;
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            const paintFrom = Date.now();
+            try {
+              const file = await extendCoverPhoto(photo, settings.ai.imageModel, coverSource?.analysis?.subject ?? "", briefing);
+              timer.add({ name: attempt === 1 ? "Cover: AI paints above and below the photo" : "Cover: AI paints it a second time", by: "openai", ms: Date.now() - paintFrom, detail: "one request to OpenAI" });
+              fault = await timer.step("Cover: Claude checks the AI picture for repeated parts and joins", "claude", () => coverFlaws(file, settings.ai.textModel), (found) => (found ? `fault found: ${found}` : "no fault found"));
+              if (!fault) break;
+            } catch (error) {
+              timer.add({ name: "Cover: AI paints above and below the photo", by: "openai", ms: Date.now() - paintFrom, detail: "failed" });
+              console.error("cover extension failed", error);
+              fault = `the request failed: ${error instanceof Error ? error.message : "unknown error"}`;
+              break;
+            }
+          }
+          if (fault && !fault.startsWith("the request failed")) await rejectAiCover(photo, fault);
+          return fault;
+        })().finally(() => paintings.delete(key));
+        paintings.set(key, painting);
       }
+      const waitFrom = Date.now();
+      const fault = await painting;
+      if (!mine) timer.add({ name: "Cover: waiting for the AI picture that was already being painted", by: "openai", ms: Date.now() - waitFrom });
       if (fault) {
-        if (!fault.startsWith("the request failed")) await rejectAiCover(coverPhoto, fault);
         notes.push(`The AI cover was not used (${fault}). The cover shows the whole photo on a blurred background instead. Press "Paint a new version" on the Cover tab to try again, or pick another photo.`);
         coverMode = "full";
       }
@@ -463,8 +486,11 @@ async function buildModel(edition: Edition, notes: string[], timer: Timer, optio
     },
     fonts: fonts(),
   };
-  return { model, adverts };
+  return { model, adverts, coverPending };
 }
+
+// AI covers being painted now, by the file they will be kept in.
+const paintings = new Map<string, Promise<string | null>>();
 
 type LayoutReport = { pages?: number; starts?: Record<string, number>; adverts?: Record<string, number>; broken?: string[]; cut?: string[]; error?: string };
 
@@ -568,6 +594,21 @@ async function renderTimed(editionId: number, timer: Timer, waited: number): Pro
     throw new Error("This edition has no articles to print.");
   }
 
+  // Marked as "being printed". Any change made while this runs marks the edition as changed again, and then this
+  // PDF does not count as showing the latest changes.
+  await appExecute("UPDATE mg_editions SET pdf_stale = ? WHERE id = ?", [PRINTING, edition.id]);
+  try {
+    return await printEdition(edition, timer, waited);
+  } catch (error) {
+    await appExecute("UPDATE mg_editions SET pdf_stale = 1 WHERE id = ? AND pdf_stale = ?", [edition.id, PRINTING]).catch(() => undefined);
+    throw error;
+  }
+}
+
+/** The value of pdf_stale while a PDF is being made: 0 = up to date, 1 = changed since. */
+const PRINTING = 2;
+
+async function printEdition(edition: Edition, timer: Timer, waited: number): Promise<RenderResult> {
   const notes: string[] = [];
   const { model, adverts } = await buildModel(edition, notes, timer);
 
@@ -627,10 +668,11 @@ async function renderTimed(editionId: number, timer: Timer, waited: number): Pro
     ...kept,
     ...notes.map((message) => ({ level: "warning" as const, message: PDF_PREFIX + message })),
   ];
-  await appExecute("UPDATE mg_editions SET pdf_path = ?, cover_path = ?, page_count = ?, pdf_stale = 0, warnings = ? WHERE id = ?", [
+  await appExecute("UPDATE mg_editions SET pdf_path = ?, cover_path = ?, page_count = ?, pdf_stale = IF(pdf_stale = ?, 0, 1), warnings = ? WHERE id = ?", [
     pdfFile,
     coverFile,
     pageCount,
+    PRINTING,
     JSON.stringify(warnings),
     edition.id,
   ]);
@@ -737,11 +779,14 @@ export async function coverState(editionId: number): Promise<CoverState> {
 
 /** Stores the cover photo and headline chosen by hand (null and "" = automatic) and prints again. */
 export async function chooseCover(editionId: number, postId: number | null, line: string, by?: string): Promise<RenderResult> {
+  const before = await coverState(editionId);
   await appExecute(
     `INSERT INTO mg_edition_front_matter (edition_id, cover_pick_post_id, cover_line) VALUES (?, ?, ?)
      ON DUPLICATE KEY UPDATE cover_pick_post_id = VALUES(cover_pick_post_id), cover_line = VALUES(cover_line)`,
     [editionId, postId, line.trim().slice(0, 255) || null],
   );
+  // How the old picture was moved and zoomed says nothing about the new one.
+  if (before.pick !== postId) await resetFrame(editionId, "cover").catch(() => undefined);
   return renderEdition(editionId, { label: "Cover photo or headline changed, PDF created again", by });
 }
 
@@ -751,6 +796,8 @@ export async function chooseCover(editionId: number, postId: number | null, line
  * photo is thrown away first, so a new one is painted (one paid request).
  */
 export async function setCoverStyle(editionId: number, style: CoverStyle, repaint: boolean, by?: string): Promise<RenderResult> {
+  // Another style, or a newly painted picture, is another picture: its framing starts afresh.
+  await resetFrame(editionId, "cover").catch(() => undefined);
   await appExecute(
     `INSERT INTO mg_edition_front_matter (edition_id, cover_style) VALUES (?, ?)
      ON DUPLICATE KEY UPDATE cover_style = VALUES(cover_style)`,
@@ -796,8 +843,55 @@ function toAppAddresses(html: string): string {
 export async function designHtml(editionId: number, options: Pick<BuildOptions, "only" | "trial"> = {}): Promise<string | null> {
   const edition = await getEdition(editionId);
   if (!edition || !edition.articles.some((article) => article.included && article.post)) return null;
-  const { model } = await buildModel(edition, [], new Timer(), { ...options, live: true });
-  return toAppAddresses(buildMagazineHtml(model));
+  const timer = new Timer();
+  const { model, coverPending } = await buildModel(edition, [], timer, { ...options, live: true });
+  const html = toAppAddresses(buildMagazineHtml(model));
+  if (options.only !== undefined) return html;
+  // What the Design tab needs to know about this build, read by it from the page: whether the cover is still to
+  // be painted, and where the server's time went. The tab adds the browser's own share (loading the photos,
+  // laying out the pages) and has the whole wait recorded, see recordDesignWait.
+  const build = JSON.stringify({ ms: timer.total(), steps: timer.steps }).replace(/</g, "\\u003c");
+  const facts = `<meta name="mg-cover-pending" content="${coverPending && edition.status === "draft" ? 1 : 0}"><script type="application/json" id="mg-build">${build}</script>`;
+  return html.replace("<head>", () => `<head>${facts}`);
+}
+
+/** A wait shorter than this is not worth a line in the processing time (a rebuild after a small change). */
+const DESIGN_WORTH_RECORDING = 2000;
+
+/**
+ * Records how long the person waited for the Design tab's pages: the server's steps as the page reported them,
+ * and the rest as the browser's work. Short waits are left out.
+ */
+export async function recordDesignWait(editionId: number, waited: number, steps: TimingStep[], by?: string | null): Promise<boolean> {
+  if (waited < DESIGN_WORTH_RECORDING) return false;
+  const timer = new Timer();
+  let server = 0;
+  for (const step of steps) {
+    timer.add(step);
+    server += step.ms;
+  }
+  timer.add({ name: "In the browser: loading the photos and laying out the pages", by: "app", ms: Math.max(0, waited - server) });
+  await recordTiming(editionId, "design", "Pages built for the Design tab", timer, by, waited);
+  return true;
+}
+
+/**
+ * Paints the AI cover this edition is waiting for, so the Design tab can show it before any PDF exists. The picture
+ * is kept and reused by every later PDF, so this is the same one paid request the first PDF would have made.
+ */
+export async function paintCover(editionId: number, by?: string | null): Promise<{ painted: boolean; note: string | null }> {
+  const edition = await getEdition(editionId);
+  if (!edition || !edition.articles.some((article) => article.included && article.post)) throw new Error("This edition has no articles.");
+  if (edition.status !== "draft") throw new Error("This edition is finished. Reopen it to change it.");
+  const timer = new Timer();
+  const notes: string[] = [];
+  try {
+    await buildModel(edition, notes, timer, { live: true, paint: true });
+  } finally {
+    await recordTiming(editionId, "design", "AI cover painted for the Design tab", timer, by);
+  }
+  const note = notes.find((entry) => entry.startsWith("The AI cover")) ?? null;
+  return { painted: note === null, note };
 }
 
 export type ArticleText = {

@@ -63,6 +63,9 @@ This shows the magazine as it will print, two pages at a time. Turn pages with t
 - **Click a photo** to move it inside its frame, zoom it, or change the picture. Changes save by themselves.
 - **Click a headline or paragraph** to edit the article's text. A change is kept only if the article still takes the same pages; otherwise the app says what is wrong.
 - The list at the top shows every change, each with a Reset.
+- The pages are built again by themselves whenever something was changed on another tab (articles, adverts, foreword, cover). While you are editing a photo or a text it waits until you are done.
+- **The cover.** If the cover is set to "Stretched with AI" and that picture has not been painted yet, the tab shows the photo on a blurred background and starts the painting by itself (about half a minute, one request to OpenAI). The pages are built again when it is ready. The picture is kept, so creating the PDF afterwards does not pay for it again.
+- Changing the cover photo or its style starts the cover's own position and zoom afresh.
 
 ### 7. Create the PDF
 
@@ -90,6 +93,9 @@ The Settings page holds the rules: how many articles an edition has, the order o
 | A text change is "Not kept" | Shorten or lengthen the text as the message says, or press Cancel. |
 | A photo will not move | Read the line under the zoom control: it says which way the picture has room. Zoom in to move it further. |
 | The pages on the Design tab do not appear | Press **Reload**. If it still fails, create the PDF: its message says what is wrong. |
+| The Design tab says the AI cover could not be painted | Read the reason it gives, then press **Try again**, or choose another style on the Cover tab. |
+| The PDF is "out of date" straight after it was created | Something was changed while it was being made. Create it again. |
+| "Could not find Chrome" when creating a PDF | On the server, in the app folder: `npx puppeteer browsers install chrome`. |
 | An advert is not offered for an edition | It is already in that edition, or it is disabled on the Adverts page. |
 
 ## Running the server
@@ -97,6 +103,27 @@ The Settings page holds the rules: how many articles an edition has, the order o
 ### One process only
 
 The app must run as a single process (the PM2 file in `deploy/` does this). Background work lives in that process. If the server restarts while a PDF is being created, the run is marked as not finished and has to be started again; nothing else is lost.
+
+### Setting up a new server (Ubuntu 24.04)
+
+Beyond the usual clone, `.env`, `npm ci`, `npm run migrate`, `npm run build` and `pm2 start deploy/ecosystem.config.cjs`:
+
+- **Node 22.12 or newer.** With nvm: `nvm install 22`, then `nvm use` in the app folder before every npm or pm2 command. The PM2 file starts the app with the Node of the shell it is started from.
+- **Chrome's system libraries:** `sudo apt install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64 fonts-liberation`
+- **Chrome itself:** `npx puppeteer browsers install chrome` if creating a PDF says "Could not find Chrome".
+- **Chrome's sandbox.** Ubuntu 23.10 and newer refuse it ("No usable sandbox") until this file exists as `/etc/apparmor.d/magazine-chrome`, loaded with `sudo apparmor_parser -r /etc/apparmor.d/magazine-chrome`. Change the path if the app runs as another user.
+
+  ```
+  abi <abi/4.0>,
+  include <tunables/global>
+
+  profile magazine-chrome /home/deploy/.cache/puppeteer/chrome/*/chrome-linux64/chrome flags=(unconfined) {
+    userns,
+
+    include if exists <local/magazine-chrome>
+  }
+  ```
+- **Port.** The app listens on 127.0.0.1:4310; nginx passes the subdomain to it (`deploy/nginx.conf.example`).
 
 ### Updating
 
@@ -109,6 +136,10 @@ pm2 restart magazine-generator
 ```
 
 `npm run migrate` applies any new files in `db/migrations`; it is safe to run every time.
+
+The app needs Node 22.12 or newer: run `nvm use` in the app folder first if the server's own Node is older.
+
+If creating a PDF then says "Could not find Chrome", the browser that makes the PDFs was not downloaded (or a newer one is needed after an update). Run `npx puppeteer browsers install chrome` in the app folder; no restart is needed. If an earlier attempt was cut off, delete the folder the error message names first. (The app carries its own unpacker, the `yauzl` package, so the server does not need `unzip`.)
 
 ### Backups
 

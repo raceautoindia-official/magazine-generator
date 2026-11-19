@@ -392,3 +392,17 @@ The owner pointed out that "edge cases" also means difficulties in using the scr
 | OPS (new) | The production build is checked: it builds without warnings and serves every route |
 
 Still open after Phase 6: DES-12 (two people editing one edition at once), DES-14 (a very large edition on the Design tab), AD-20 (no limit on adverts per edition), AD-24 (white space above a half page on a very short article), COV-01 (no AI-generated cover when no article has a usable photo), and copying backups off the server.
+
+## 22. Design tab and the rest of the edition (19 November 2026)
+
+| ID | Case | What happens |
+|---|---|---|
+| DES-15 | Articles, adverts, foreword or cover changed on another tab | The Design tab builds its pages again when it is opened; while a photo or text is being edited it waits and says so |
+| DES-16 | Cover set to AI, picture not painted yet | Pages shown at once with a blurred stand-in and a notice; painting starts by itself once, in the background; pages built again when it is ready |
+| DES-17 | Painting fails (key, network, a fault found in the picture) | Said on the tab with the reason; "Try again" for a failed request; never retried by itself |
+| DES-18 | A PDF is created while the cover is being painted | Both use the one painting; nothing is paid twice |
+| DES-19 | Cover photo or style changed while the cover is being painted | Refused with a message until the painting is done |
+| DES-20 | Session ends, then the Design tab is opened or reloaded | "You have been signed out" at once |
+| DES-21 | Cover photo or style changed after the cover was moved or zoomed | The position and zoom start afresh for the new picture |
+| PDF-04 | Something is changed while a PDF is being created | The finished PDF is marked out of date; the edition cannot be finished until it is created again |
+| TIME-01 | Waiting for the Design tab's pages | A clock runs; a wait of two seconds or more is in the processing time |

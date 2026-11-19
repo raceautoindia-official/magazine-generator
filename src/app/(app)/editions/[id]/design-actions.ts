@@ -6,8 +6,9 @@ import { addUpload, listUploads, parseFrame, resetFrame, resetText, saveFraming,
 import { getEdition } from "@/lib/editions";
 import type { Framing } from "@/lib/framing";
 import { prepareImage } from "@/lib/magazine/images";
-import { articleText, fileAddress, type ArticleText } from "@/lib/magazine/render";
+import { articleText, fileAddress, recordDesignWait, type ArticleText } from "@/lib/magazine/render";
 import { EditError } from "@/lib/review";
+import type { TimingStep } from "@/lib/timing";
 
 export type DesignResult = { error?: string; done?: number };
 
@@ -17,6 +18,26 @@ const fail = (error: unknown, fallback: string): DesignResult => {
 };
 
 const whole = (value: number) => Number.isInteger(value) && value > 0;
+
+/**
+ * How long the pages took to appear on the Design tab, told by the tab once they are there, so that the wait is
+ * part of the edition's processing time. Answers whether it was long enough to be recorded.
+ */
+export async function reportDesignWait(editionId: number, waited: number, steps: unknown): Promise<boolean> {
+  const user = await currentUser();
+  if (!user || !whole(editionId) || !Number.isFinite(waited) || waited < 0 || waited > 15 * 60_000 || !Array.isArray(steps) || steps.length > 40) return false;
+  const tidy = steps.flatMap<TimingStep>((step: { name?: unknown; ms?: unknown; by?: unknown; detail?: unknown }) =>
+    typeof step?.name === "string" && typeof step.ms === "number" && step.ms >= 0 && step.ms <= waited + 1000 && (step.by === "app" || step.by === "claude" || step.by === "openai" || step.by === "site")
+      ? [{ name: step.name.slice(0, 160), ms: Math.round(step.ms), by: step.by, ...(typeof step.detail === "string" ? { detail: step.detail.slice(0, 200) } : {}) }]
+      : [],
+  );
+  try {
+    return await recordDesignWait(editionId, Math.round(waited), tidy, user.email);
+  } catch (error) {
+    console.error("design wait not recorded", error);
+    return false;
+  }
+}
 
 /** Where a picture sits in its frame: saved when the person lets go of it. */
 export async function saveFrameAt(editionId: number, frame: string, framing: Framing): Promise<DesignResult> {

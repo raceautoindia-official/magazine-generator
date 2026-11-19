@@ -82,7 +82,8 @@ function toSummary(row: EditionRow): EditionSummary {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     pageCount: row.pdf_path ? (row.page_count ?? 0) : null,
-    pdfStale: Boolean(row.pdf_path) && row.pdf_stale === 1,
+    // 2 = a PDF is being made right now; until it is done the one there is does not show the latest changes.
+    pdfStale: Boolean(row.pdf_path) && row.pdf_stale !== 0,
   };
 }
 

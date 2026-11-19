@@ -605,3 +605,18 @@ Tested in a browser: opens on the cover alone with the frame 771 px tall in a 10
 - Copying backups off the server: that depends on where the owner wants them.
 - The session-ended message for the smaller actions (moving an advert, disabling one, choosing an extra image): those still go to the login page, and carry nothing typed.
 - Not tested: a restart of the real server in the middle of a run (the case was simulated with a database row); cron; nginx; the AI cover step in the dry run.
+
+## 36. The Design tab and the rest of the edition agree (19 November 2026)
+
+Found on the live server: the Design tab showed no clock while it built its pages and the wait was not in the processing time; it showed a blurred cover where the PDF would have the AI picture; and a change on another tab did not reach it until the browser page was reloaded.
+
+- **One version of the edition.** The edition page works out a signature of everything outside the Design tab that changes its pages (status, the article list, foreword, cover choice and style, adverts, how extra images are used). When it differs from the one the pages were built from, the tab builds them again as soon as it is on screen and nothing is being edited. Its own changes are not in the signature: it shows those as they are made.
+- **The AI cover is painted for the Design tab too.** A build never waits for it: the pages come at once with the blurred stand-in and say so, and painting runs as a background job (`cover:<id>`), started once by the tab. A failure is shown with "Try again" and is not retried by itself. The picture is the one the PDF uses; a PDF run and this job that want the same picture at the same moment share one painting.
+- **The wait is counted.** A clock runs while the pages are built. The page carries the server's steps; once the pages are there the tab reports the whole wait, and a wait of two seconds or more is recorded as "Pages built for the Design tab" with the browser's share as a step of its own.
+- **"The PDF is up to date" is only said when it is.** While a PDF is made the edition is marked as being printed (`pdf_stale = 2`); any change in that time marks it as changed, and the finished run then leaves it out of date. Before, a photo moved during the half minute a PDF takes was reported as included.
+- **A session that has ended** shows on the Design tab at once, in place of two minutes of "Building the pages".
+- **The cover's framing belongs to its picture:** another cover photo, another style or a newly painted picture starts it afresh; a new headline alone keeps it.
+
+Tested: the server side on a scratch edition without an OpenAI key (nothing charged); in a browser, the clock, the recorded wait (on a slowed-down browser), the rebuild after a foreword saved on its tab, and the signed-out message; against a production build with an invalid key, that painting starts once, fails plainly and is not repeated. Not tested: a successful painting started from the Design tab (it would be a paid request; the same code paints for the PDF).
+
+**Following background work (added the same day).** On a local test the page went on showing "The AI is painting the cover" after the painting had finished; the server log showed the page had never asked for the result. It could not be reproduced (development and production builds, a quick and a slow painting, changing tabs meanwhile, arriving from the dashboard). The page now follows a job with plain requests to `/jobs/<id>`, each with a time limit of 15 seconds, in place of server actions: actions of one page run one after the other and can be held up by another action or by the router, a plain request cannot. Starting a job no longer runs inside a React transition.

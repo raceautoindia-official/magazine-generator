@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatDuration } from "@/lib/duration";
 
 export type TimingStepView = { name: string; ms: number; by: "app" | "claude" | "openai" | "site"; detail?: string };
-export type TimingRunView = { id: number; kind: "generate" | "pdf" | "foreword" | "advert"; label: string; totalMs: number; steps: TimingStepView[]; by: string | null; at: string };
+export type TimingRunView = { id: number; kind: "generate" | "pdf" | "foreword" | "advert" | "design"; label: string; totalMs: number; steps: TimingStepView[]; by: string | null; at: string };
 
 const WHO: Record<TimingStepView["by"], { name: string; colour: string }> = {
   claude: { name: "Waiting for Claude", colour: "bg-orange-400" },
@@ -12,7 +12,7 @@ const WHO: Record<TimingStepView["by"], { name: string; colour: string }> = {
   site: { name: "Reading from the website", colour: "bg-sky-500" },
   app: { name: "The application's own work", colour: "bg-neutral-500" },
 };
-const KIND: Record<TimingRunView["kind"], string> = { generate: "Generating the draft", pdf: "Creating the PDF", foreword: "Writing the foreword", advert: "Placing adverts" };
+const KIND: Record<TimingRunView["kind"], string> = { generate: "Generating the draft", pdf: "Creating the PDF", foreword: "Writing the foreword", advert: "Placing adverts", design: "Building the pages for the Design tab" };
 
 /**
  * How long the application has worked on this edition. The chip shows the

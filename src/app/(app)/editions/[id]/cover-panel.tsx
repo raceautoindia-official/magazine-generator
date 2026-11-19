@@ -111,7 +111,7 @@ export function CoverPanel({
               <img key={stamp} src={`/editions/${id}/cover?v=${stamp}`} alt="Cover of this edition" className="w-72 border border-neutral-300" />
             ) : (
               <div className="flex aspect-[210/297] w-72 items-center justify-center border border-dashed border-neutral-400 bg-neutral-100 p-6 text-center text-sm text-neutral-700">
-                The cover appears here when the PDF has been created.
+                The cover appears here when the PDF has been created. Before that, see it under “Design the pages”.
               </div>
             )}
             {busy && (
