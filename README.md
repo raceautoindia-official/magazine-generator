@@ -52,7 +52,7 @@ If the database user is not allowed to create a database, set `APP_DB_NAME=race_
 ## Deployment (same VPS as the main site)
 
 1. Copy the project to the server, create `.env` from `.env.example`, run `npm ci`, `npm run migrate`, `npm run build`.
-2. Start it with PM2: `pm2 start deploy/ecosystem.config.cjs` (listens on port 3100, one process).
+2. Start it with PM2: `pm2 start deploy/ecosystem.config.cjs` (listens on 127.0.0.1:4310, one process).
 3. Chromium needs a few system libraries on Ubuntu. If creating a PDF fails with a missing library error, install them:
    `sudo apt install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64`
    (on Ubuntu 22.04 the last one is `libasound2`).
