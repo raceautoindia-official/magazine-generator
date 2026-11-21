@@ -16,6 +16,8 @@ export type PreviewRow = {
   national: number;
   international: number;
   included: number;
+  /** Of those, general posts added only to reach the minimum. */
+  filler: number;
   /** Editions already made for this month, newest first. */
   existing: { id: number; finished: boolean }[];
 };
@@ -78,8 +80,11 @@ export function GenerateForm({
                 Edition
               </label>
             </th>
-            <th className="px-3 py-2 text-right" title="How many posts would be printed">
-              Articles
+            <th className="px-3 py-2 text-right" title="Every post of the month that belongs to this edition, by its category, its words or Claude's reading">
+              Posts for this edition
+            </th>
+            <th className="px-3 py-2 text-right" title="How many of them the draft starts with. You can include more, or take some out, in the draft.">
+              Go into the magazine
             </th>
             <th className="px-3 py-2 text-right" title="Posts from India, and posts from other markets">
               India / International
@@ -98,6 +103,9 @@ export function GenerateForm({
                   : row.included >= minimum
                     ? { text: `Yes (the usual size is ${recommended})`, tone: "bg-green-50 text-green-950" }
                     : { text: `Thin: ${minimum - row.included} short of the minimum of ${minimum}`, tone: "bg-amber-100 text-amber-950" };
+            const own = row.byCategory + row.byWords;
+            // The edition's own posts that the draft does not start with: over the usual size, or too long to go in by themselves.
+            const left = own - (row.included - row.filler);
             return (
               <tr key={row.key} className="border-b border-neutral-200 last:border-0">
                 <td className="px-3 py-2.5">
@@ -114,11 +122,16 @@ export function GenerateForm({
                     {row.label}
                   </label>
                 </td>
-                <td
-                  className="px-3 py-2.5 text-right font-medium tabular-nums"
-                  title={`${row.byCategory} by category, ${row.byWords} placed by keywords or Claude, ${row.general} general posts available as filler`}
-                >
-                  {row.included}
+                <td className="px-3 py-2.5 text-right tabular-nums" title={`${row.byCategory} by category, ${row.byWords} placed by keywords or Claude`} data-own>
+                  {own}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums" data-included>
+                  <span className="font-medium">{row.included}</span>
+                  {(left > 0 || row.filler > 0) && (
+                    <span className="block text-xs text-neutral-600">
+                      {[left > 0 ? `${left} left out, can be included in the draft` : "", row.filler > 0 ? `${row.filler} of them general posts, to reach ${minimum}` : ""].filter(Boolean).join("; ")}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   {row.national} / {row.international}

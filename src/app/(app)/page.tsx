@@ -94,6 +94,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/">) {
       national: included.filter((candidate) => candidate.section === "national").length,
       international: included.filter((candidate) => candidate.section === "international").length,
       included: included.length,
+      filler: included.filter((candidate) => candidate.assignedBy === "general").length,
       existing: editions
         .filter((edition) => edition.contentMonth === month && edition.vertical === vertical.key)
         .map((edition) => ({ id: edition.id, finished: edition.status === "finished" })),
@@ -145,8 +146,9 @@ export default async function DashboardPage({ searchParams }: PageProps<"/">) {
             A post goes to the edition its category belongs to. Posts in shared categories (Tech, Auto Comp, Business) go to
             every edition their headline or tags name, or that Claude places them in, so one post can count for more than one
             edition. {general} shared {general === 1 ? "post matches" : "posts match"} no edition and {general === 1 ? "is" : "are"} only
-            used to reach the minimum. {unused} {unused === 1 ? "post is" : "posts are"} in categories no edition uses. Hover over a
-            number in the Articles column to see how it is made up.
+            used to reach the minimum. {unused} {unused === 1 ? "post is" : "posts are"} in categories no edition uses. A draft starts with at
+            most {settings.counts.recommended} articles (those that most surely belong to it, then featured posts, then the most read); the rest of the edition&apos;s posts stay available in the draft and can be
+            included there. Hover over a number under &ldquo;Posts for this edition&rdquo; to see how it is made up.
           </p>
         </details>
       </section>
